@@ -1,0 +1,14 @@
+# Ignoro la cartella IAR_Debug
+
+.settings/
+
+IAR_Debug/Obj/
+IAR_Release/Obj/
+
+IAR_Release/
+
+IAR/SW0340001.dep
+
+IAR/settings/
+*.dep
+*.ewd
