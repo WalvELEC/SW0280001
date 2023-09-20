@@ -3891,36 +3891,48 @@ static void Isobus_AuxInMain( void )
 }
 
 //------------------------------------------------------------------------------
-static wres_t Isobus_ClaimCheckForVtFunction( void )
+static wres_t Isobus_ClaimCheckForVtFunction( uint8_t *newVT )
 {
     wres_t retVal;
     uint8_t rxMsg;
-    static uint32_t counter = 0U;
+//    static uint32_t counter = 0U;
     
     retVal = WRES_OK;
-    if ( ( isobus_Net.status.value != ISOBUS_NET_OFF_STATUS ) && ( isobus_Net.status.value != ISOBUS_NET_STARTUP_STATUS ) )
-    {
-        if ( ++counter >= ( 5000000U / SCHEDULE_COUNTER_TH_SAEJ ) )
-        {
-            counter = 0U;
-            Saej_SendPGNRequest( 0xEE00UL, isobus_Vt.sourceAddr );
-        } 
+    *newVT = 0xFF;
+//    if ( ( isobus_Net.status.value != ISOBUS_NET_OFF_STATUS ) && ( isobus_Net.status.value != ISOBUS_NET_STARTUP_STATUS ) )
+//    {
+//        if ( ++counter >= ( 5000000U / SCHEDULE_COUNTER_TH_SAEJ ) )
+//        {
+//            counter = 0U;
+//            Saej_SendPGNRequest( 0xEE00UL, isobus_Vt.sourceAddr );
+//        } 
         if ( CAN_NEW_MSG == CAN_StoredMsgRx( CAN_MSG_SAEJ_ADDRESS_CLAIM, &rxMsg ) )
         {
-            if ( CAN_StoredMsgGet( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg ).SA == isobus_Vt.sourceAddr )
-            {
-                if ( ( 0x1DU != CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 5U ) ) || ( 0x00U != ( CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 4U ) & 0xF8U ) ) )
+            if ( ( isobus_Net.status.value != ISOBUS_NET_OFF_STATUS ) && ( isobus_Net.status.value != ISOBUS_NET_STARTUP_STATUS ) )
+            {  
+                if ( CAN_StoredMsgGet( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg ).SA == isobus_Vt.sourceAddr )
                 {
-                    retVal = WRES_ERROR;
+                    if ( ( 0x1DU != CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 5U ) ) || ( 0x00U != ( CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 4U ) & 0xF8U ) ) )
+                    {
+                        retVal = WRES_ERROR;
+                    }
+                }
+                else
+                {
+                    if ( ( 0x1DU == CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 5U ) ) && ( 0x00U == ( CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 4U ) & 0xF8U ) ) )
+                    {
+                        *newVT = CAN_StoredMsgGet( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg ).SA;
+                        retVal = WRES_ERROR;
+                    }
                 }
             }
             CAN_StoredMsgClear( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg );
         } 
-    }
-    else
-    {
-        counter = 0U;
-    }
+//    }
+//    else
+//    {
+//        counter = 0U;
+//    }
     
     return retVal;
 }
@@ -4189,7 +4201,7 @@ void Isobus_MsgRxCounterUpdate( void )
 }
 
 //------------------------------------------------------------------------------
-void Isobus_Reset( void )
+void Isobus_Reset( uint8_t VtSA )
 {
     uint8_t i;
     
@@ -4216,7 +4228,7 @@ void Isobus_Reset( void )
     isobus_Vt.fontLarge = 0U;
     isobus_Vt.typeAttribute = 0xFFU;
     isobus_Vt.objectPoolReady = 0U;
-    isobus_Vt.sourceAddr = 0xFFU;
+    isobus_Vt.sourceAddr = VtSA; //0xFFU;
     isobus_Vt.preferredAddr = 0xFFU;
     isobus_Vt.status.cnt = 0U;
     isobus_Vt.status.cntTh = 0U;
@@ -4678,6 +4690,7 @@ void Isobus_Main( void )
     uint8_t rxMsg;
     uint8_t resVtRxMsg;
     wres_t retVtRxMsg;
+    uint8_t newVTSA;
     static uint8_t tpIndex = 0xFFU;  
     static uint8_t opUploadStep = ISOBUS_OP_STEP_FIRST;
     static uint8_t opLoadTry = 0U;
@@ -4779,9 +4792,9 @@ void Isobus_Main( void )
     }      
     
     Isobus_AuxInMaintenanceMsgTx();
-    if ( WRES_ERROR == Isobus_ClaimCheckForVtFunction() )
+    if ( WRES_ERROR == Isobus_ClaimCheckForVtFunction( &newVTSA ) )
     {
-        Isobus_Reset();
+        Isobus_Reset( newVTSA );
     }
 
 #ifdef ISOBUS_DEBUG    
@@ -4856,22 +4869,30 @@ void Isobus_Main( void )
             isobus_Net.status.previous = isobus_Net.status.value;
             isobus_Net.startupCnt = 0U;
         }      
-        if ( CAN_NEW_MSG == CAN_StoredMsgRx( CAN_MSG_SAEJ_ADDRESS_CLAIM, &rxMsg ) )
+        if ( 0xFF != isobus_Vt.sourceAddr )
         {
-            if ( ( 0x1DU == CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 5U ) ) && ( 0x00U == ( CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 4U ) & 0xF8U ) ) )
-            {
-                //ho trovato il VT principale: Function = 0x1D, Function Instance = 0
-                isobus_Vt.sourceAddr = CAN_StoredMsgGet( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg ).SA;
-                isobus_Net.status.value = ISOBUS_NET_WS_INIT_STATUS;
-                Isobus_UpdateMsgVtAddress();
-            }
-            CAN_StoredMsgClear( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg );
+            isobus_Net.status.value = ISOBUS_NET_WS_INIT_STATUS;
+            Isobus_UpdateMsgVtAddress();
         }
         else
         {
-            if ( ++isobus_Net.startupCnt >= ( ( 5000000U / SCHEDULE_COUNTER_TH_SAEJ ) - 1UL ) )
+            if ( CAN_NEW_MSG == CAN_StoredMsgRx( CAN_MSG_SAEJ_ADDRESS_CLAIM, &rxMsg ) )
             {
-                isobus_Net.status.value = ISOBUS_NET_OFF_STATUS;
+                if ( ( 0x1DU == CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 5U ) ) && ( 0x00U == ( CAN_StoredMsgGetData( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg, 4U ) & 0xF8U ) ) )
+                {
+                    //ho trovato il VT principale: Function = 0x1D, Function Instance = 0
+                    isobus_Vt.sourceAddr = CAN_StoredMsgGet( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg ).SA;
+                    isobus_Net.status.value = ISOBUS_NET_WS_INIT_STATUS;
+                    Isobus_UpdateMsgVtAddress();
+                }
+                CAN_StoredMsgClear( CAN_MSG_SAEJ_ADDRESS_CLAIM, rxMsg );
+            }
+            else
+            {
+                if ( ++isobus_Net.startupCnt >= ( ( 5000000U / SCHEDULE_COUNTER_TH_SAEJ ) - 1UL ) )
+                {
+                    isobus_Net.status.value = ISOBUS_NET_OFF_STATUS;
+                }
             }
         }
         break;      
@@ -5348,7 +5369,7 @@ void Isobus_Main( void )
                     //isobus_Vt.status.value = ISOBUS_VT_STATUS_OFF;
                   
                     //ho esaurito il numero di tentativi di comunicazione, resetto lo stato e provo a ripartire
-                    Isobus_Reset();                  
+                    Isobus_Reset( 0xFF );                  
                 }
             }
             break;            
